@@ -19,11 +19,11 @@
       function createImage(url) {
           var markup = '<a href="' + url + '"><img src="' + url + '" /></a>';
           return markup;
-      }       
+      }
 
       function startGallery() {
          $('#media_urls h1').hide();
-         $('#media_urls a:first').click(); 
+         $('#media_urls a:first').click();
       }
 
       var socket = io();
@@ -36,11 +36,22 @@
           console.log("Adding new media...");
           var markup = createImage(url);
           $('#media_urls').prepend(markup);
-          window.setTimeout(startGallery, 500);
       });
 
       $(document).ready(function() {
-        $('#media_urls').photobox('a', {autoplay: true, loop: true});
+        $.get('/initmedia', function(data) {
+          if (data.length) {
+            console.log("Initializing gallery with " + data);
+            for (var i = 0; i < data.length; i++) {
+              $('#media_urls').prepend(createImage(data[i]));
+            }
+
+            $('#media_urls').photobox('a', {autoplay: true, loop: true});
+            window.setTimeout(startGallery, 500);
+          } else {
+            console.log("No initial media, add some!");
+          }
+        });
       });
     </script>
   </body>

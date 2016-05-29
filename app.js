@@ -7,6 +7,7 @@ var bodyParser = require('body-parser');
 var fs = require('fs');
 var mime = require('mime-types');
 var requestsModule = require('request');
+var recursive = require('recursive-readdir');
 
 // Create Express app and HTTP server, and configure socket.io
 var app = express();
@@ -43,6 +44,29 @@ app.post('/message', function(request, response) {
     response.send(twiml.toString());
 });
 
+function readMediaFiles(req, res, next) {
+  var imgDir = path.join(path.join(STATICS_DIR, 'img'));
+  console.log("Reading files from " + imgDir);
+  recursive(imgDir, ['placeholder.git'], function(err, files) {
+    console.log("Initializing gallery with " + files);
+
+    res.locals.imageNames = [];
+    for (var i = 0; i < files.length; i++) {
+      res.locals.imageNames.push(getUrlPath(files[i]))
+    }
+
+    next();
+  });
+}
+
+app.get('/initmedia',
+  readMediaFiles,
+  function(req, res) {
+    res.type('application/json');
+    res.json(res.locals.imageNames);
+  }
+);
+
 function handleMessage(mediaRequest, numMedia) {
   // take off the +1 from the phone number, they're all US
   var phoneNumber = mediaRequest.body.From.substr(2);
@@ -70,12 +94,16 @@ function handleMessage(mediaRequest, numMedia) {
 
       requestsModule.get(mediaUrl).pipe(file).on('finish', function() {
         file.close(function() {
-          var urlPath = savePath.substr(savePath.indexOf(STATICS_DIR) + STATICS_DIR.length);
+          var urlPath = getUrlPath(savePath);
           console.log('Finished saving media to ' + savePath + ' notifying listening connections of new media at ' + urlPath);
           io.emit('newMedia', urlPath);
         });
       });
   }
+}
+
+function getUrlPath(filePath) {
+  return filePath.substr(filePath.indexOf(STATICS_DIR) + STATICS_DIR.length);
 }
 
 io.on('connection', function(socket){
