@@ -1,11 +1,26 @@
 {
-  "name": "realtime-mms-photostream",
+  "name": "phillip-loren-wedding",
   "version": "0.0.1",
   "description": "A quick real-time photo gallery of photos received from Twilio MMS.",
   "dependencies": {
     "express": "^4.10.2",
     "body-parser": "^1.9.2",
     "socket.io": "^1.2.0",
-    "twilio": "^1.7.0"
-  }
+    "twilio": "^1.7.0",
+    "mime-types": "^2.1.11"
+  },
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/phillipuniverse/Realtime-MMS-Photostream.git"
+  },
+  "author": "Phillip Verheyden",
+  "license": "WTFPL",
+  "bugs": {
+    "url": "https://github.com/phillipuniverse/Realtime-MMS-Photostream/issues"
+  },
+  "homepage": "https://github.com/phillipuniverse/Realtime-MMS-Photostream#readme"
 }
