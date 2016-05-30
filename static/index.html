@@ -39,15 +39,15 @@
       });
 
       $(document).ready(function() {
+        $('#media_urls').photobox('a', {autoplay: true, loop: true, history: false});
+        window.setTimeout(startGallery, 750);
+
         $.get('/initmedia', function(data) {
           if (data.length) {
             console.log("Initializing gallery with " + data);
             for (var i = 0; i < data.length; i++) {
               $('#media_urls').prepend(createImage(data[i]));
             }
-
-            $('#media_urls').photobox('a', {autoplay: true, loop: true});
-            window.setTimeout(startGallery, 500);
           } else {
             console.log("No initial media, add some!");
           }
