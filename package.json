@@ -9,7 +9,8 @@
     "twilio": "^1.7.0",
     "mime-types": "^2.1.11",
     "recursive-readdir": "^2.0.0",
-    "instagram-node-lib": "^0.1.1"
+    "instagram-node-lib": "^0.1.1",
+    "node-persist": "^0.0.11"
   },
   "main": "app.js",
   "scripts": {

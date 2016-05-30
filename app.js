@@ -1,6 +1,7 @@
 // Require dependencies
 var http = require('http');
 var path = require('path');
+var url = require('url');
 var express = require('express');
 var twilio = require('twilio');
 var bodyParser = require('body-parser');
@@ -9,11 +10,19 @@ var mime = require('mime-types');
 var requestsModule = require('request');
 var recursive = require('recursive-readdir');
 var instagram = require('instagram-node-lib');
+var storage = require('node-persist');
 
-// Create Express app and HTTP server, and configure socket.io
+// TODO:
+//  Fix button display for OAuth when on mobile; big button press
+//  Add some sort of moderation for bad images?
+//  See what happens with like 100 images
+//  Save smaller versions of the images so that they don't take so long to load
+
+// Create Express app and HTTP server, init and configure socket.io, initialize storage
 var app = express();
 var server = http.createServer(app);
 var io = require('socket.io')(server);
+storage.initSync();
 
 var STATICS_DIR = 'static';
 
@@ -33,10 +42,13 @@ instagram.set('redirect_uri', INSTAGRAM_OAUTH_REDIRECT_URL);
 // Subscription callback
 instagram.set('callback_url', INSTAGRAM_CALLBACK_URL);
 
-// Middleware to parse incoming HTTP POST bodies
+// Middleware to parse incoming HTTP POST bodies for Twilio
 app.use(bodyParser.urlencoded({
     extended: true
 }));
+
+// Middleware to parse POST bodies with JSON
+app.use(bodyParser.json());
 
 // Serve static content from the "static" directory
 app.use(express.static(path.join(__dirname, STATICS_DIR)));
@@ -51,7 +63,7 @@ app.post('/message', function(request, response) {
   var numMedia = parseInt(request.body.NumMedia);
 
   if (numMedia > 0) {
-      handleMessage(request, numMedia)
+      handleTwilioMessage(request, numMedia)
       twiml.message('Photo received - check the screen to see it pop up!');
   } else {
       twiml.message(':( Doesn\'t look like there was a photo in that message.');
@@ -74,7 +86,7 @@ app.get('/instagram/post', function(req, res) {
  *     {
         "changed_aspect": "media",
         "object": "user",
-        "object_id": "<string object id>",
+        "object_id": "<string user's id>",
         "time": 1464581524, //unix timestamp
         "subscription_id": 0,
         "data": {
@@ -83,7 +95,61 @@ app.get('/instagram/post', function(req, res) {
     }
  */
 app.post('/instagram/post', function(req, res) {
-  console.log('A user uploaded a picture!');
+  var imageJson = req.body[0];
+  console.log('A user uploaded a picture! Here is the data we got: ' + JSON.stringify(imageJson, null, 2));
+
+  // use the given user ID grab their saved access token, use that to download their uploaded image
+  var userId = imageJson.object_id;
+  console.log('Looking up a persisted user via their userId key: ' + userId)
+  var persistedUser = storage.getItem(userId);
+  var accessToken = persistedUser.accessToken;
+  if (!accessToken) {
+    console.log('Could not find a user record for the given user ' + userId + '. Using preconfigured token instead');
+    accessToken = INSTAGRAM_ACCESS_TOKEN;
+  }
+
+  var mediaId = imageJson.data.media_id;
+  console.log('Querying instagram for media: ' + mediaId + ' with the access token ' + accessToken + ' for user ' + persistedUser.username);
+  instagram.media.info({
+    access_token: accessToken,
+    media_id: mediaId,
+    complete: function(data) {
+        // For the spec on the JSON that gets returned here, see https://www.instagram.com/developer/endpoints/media/
+        console.log('Here is all the data about the given media: ' + data);
+        var tags = data.tags;
+        console.log('Found these tags for the given image: ' + tags);
+        var tagFilter = false;
+        // Go through each of the tags that I'm looking for and make sure the item
+        // has at least one of them
+        for (var i = 0; i < INSTAGRAM_SEARCH_TAGS.length && !tagFilter; i++) {
+          tagFilter = tags.indexOf(INSTAGRAM_SEARCH_TAGS[i]) > -1;
+        }
+        if (!tagFilter) {
+          console.log('The uploaded image did not contain any of the tags we were looking for');
+          return;
+        }
+
+        // The image is good, let's save it!
+        console.log('We found a tag we were looking for, saving the image locally');
+        var standardResUrl = data.images.standard_resolution.url;
+        // Doing something special here because there is a query string on the end of the
+        // file name for the ig_cache_key. This cache key can have a . in it
+        var ext = path.extname(url.parse(standardResUrl).pathname);
+        var media = [{
+          url: standardResUrl,
+          // Strip out the leading period
+          ext: ext.substr(1)
+        }];
+        var persistedUser = storage.getItem(userId);
+        var savePath = path.join(STATICS_DIR, 'img/instagram', persistedUser.username);
+        saveImages(savePath, media);
+
+      }
+    });
+
+    res.sendStatus(200);
+    // We've already seen this media so don't screw with it again. Sometimes instagram likes
+    // to hit the endpoint multiple times
 });
 
 app.get('/oauth_success', function(req, res) {
@@ -110,8 +176,31 @@ app.get('/oauth', function(req, res) {
     complete: function(params, response) {
       // params['access_token']
       // params['user']
-      console.log('All received params: ' + JSON.stringify(params, null, 2));
+      /* Data comes back in params looking like this:
+       * {
+            "access_token": "123456.75839fa.45d8d838d9f8ac3848",
+            "user": {
+              "username": "someuser",
+              "bio": "",
+              "website": "",
+              "profile_picture": "<profile_url>",
+              "full_name": "John Doe",
+              "id": "123456"
+          }
+        }
+       */
+      console.log('OAuth received params: ' + JSON.stringify(params, null, 2));
 
+      var userId = params.user.id;
+      var username = params.user.username;
+      var accessToken = params.access_token;
+
+      var persistedUser = {
+        username: username,
+        accessToken: accessToken
+      }
+      console.log('Persisting ' + userId + ' with access token ' + accessToken + ' for later use');
+      storage.setItem(userId, persistedUser);
     },
     error: function(errorMessage, errorObject, caller, response) {
       // errorMessage is the raised error message
@@ -151,11 +240,27 @@ app.get('/initmedia',
   }
 );
 
-function handleMessage(mediaRequest, numMedia) {
+function handleTwilioMessage(mediaRequest, numMedia) {
   // take off the +1 from the phone number, they're all US
   var phoneNumber = mediaRequest.body.From.substr(2);
 
   var savePath = path.join(STATICS_DIR, 'img/twilio', phoneNumber);
+  var media = [];
+  for (var i = 0; i < numMedia; i++) {
+    media.push({
+      url: mediaRequest.body['MediaUrl' + i],
+      type: mediaRequest.body['MediaContentType' + i]
+    });
+  }
+  saveImages(savePath, media);
+}
+
+/*
+ * savePath - where the image should be saved to
+ * mediaUrls - List of objects of the form {url = 'http://....url', ext='.jpg', type='image/jpeg'}. The
+ *    extension part is appended to the end of the file as it is saved on the local filesystem
+ */
+function saveImages(savePath, medias) {
   if (!fs.existsSync(savePath)) {
     fs.mkdirSync(savePath);
   }
@@ -163,15 +268,18 @@ function handleMessage(mediaRequest, numMedia) {
   // Get all the existing files in the save directory, returns an array of filenames
   var existingFileNames = fs.readdirSync(savePath);
   // Add 1 to the length since need to start 1 greater
-  var fileNameStart = (existingFileNames) ? existingFileNames.length + 1 : 1
+  var fileNameStartNum = (existingFileNames) ? existingFileNames.length + 1 : 1
 
-  for (i = 0; i < numMedia; i++) {
-    fileNameStart += i;
+  for (i = 0; i < medias.length; i++) {
+    fileNameStartNum += i;
 
-    var mediaUrl = mediaRequest.body['MediaUrl' + i];
-    var mediaType = mediaRequest.body['MediaContentType' + i];
-    var ext = mime.extension(mediaType);
-    var savePath = path.join(savePath, fileNameStart + '.' + ext);
+    var mediaUrl = medias[i].url;
+    var ext = medias[i].ext;
+    if (!ext) {
+      var mediaType = medias[i].type;
+      ext = mime.extension(mediaType);
+    }
+    var savePath = path.join(savePath, fileNameStartNum + '.' + ext);
 
     console.log('Saving MediaUrl: ' + mediaUrl + ' to path ' + savePath);
     var file = fs.createWriteStream(savePath);
