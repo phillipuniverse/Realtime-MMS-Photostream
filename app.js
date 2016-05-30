@@ -17,7 +17,7 @@ var io = require('socket.io')(server);
 
 var STATICS_DIR = 'static';
 
-var BASE_DOMAIN = process.env.BASE_DOMAIN || 'http://157e7ba9.ngrok.io'
+var BASE_DOMAIN = process.env.BASE_DOMAIN || 'https://157e7ba9.ngrok.io'
 
 var INSTAGRAM_CLIENT_ID = process.env.INSTAGRAM_CLIENT_ID;
 var INSTAGRAM_CLIENT_SECRET = process.env.INSTAGRAM_CLIENT_SECRET;
@@ -27,7 +27,11 @@ var INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
 instagram.set('client_id', INSTAGRAM_CLIENT_ID);
 instagram.set('client_secret', INSTAGRAM_CLIENT_SECRET);
 instagram.set('access_token', INSTAGRAM_ACCESS_TOKEN);
+// OAuth redirect
 instagram.set('redirect_uri', INSTAGRAM_OAUTH_REDIRECT_URL);
+
+// Subscription callback
+instagram.set('callback_url', INSTAGRAM_CALLBACK_URL);
 
 // Middleware to parse incoming HTTP POST bodies
 app.use(bodyParser.urlencoded({
@@ -60,9 +64,26 @@ app.post('/message', function(request, response) {
 /**
  * Instagram hits this to make sure that you're actually there
  */
-app.get('/subscribe', function(req, res) {
-  console.log('Instagram hit the subscription url, responding to challenge');
-  res.send(req.query['hub.challenge']);
+app.get('/instagram/post', function(req, res) {
+  console.log('Instagram hit the subscription url, challenge accepted!');
+  instagram.subscriptions.handshake(req, res);
+});
+
+/**
+ * Instagram hits this URL every time a user posts with JSON that looks like:
+ *     {
+        "changed_aspect": "media",
+        "object": "user",
+        "object_id": "<string object id>",
+        "time": 1464581524, //unix timestamp
+        "subscription_id": 0,
+        "data": {
+            "media_id": "<string media id>"
+        }
+    }
+ */
+app.post('/instagram/post', function(req, res) {
+  console.log('A user uploaded a picture!');
 });
 
 app.get('/oauth_success', function(req, res) {
@@ -195,4 +216,12 @@ function updateInstagramData() {
 
 server.listen(app.get('port'), function() {
     console.log('Express server listening on *:' + app.get('port'));
+
+    console.log('Re-subscribing to all authenticated user posts');
+    var unsubResult = instagram.users.unsubscribe_all({});
+    if (unsubResult) {
+      console.log('There was an error in removing exising subscriptions: ' + unsubResult);
+    }
+
+    instagram.users.subscribe({});
 });
