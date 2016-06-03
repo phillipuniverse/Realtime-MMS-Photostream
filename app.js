@@ -276,13 +276,6 @@ function saveImages(baseSaveDir, medias) {
     fs.mkdirSync(baseSaveDir);
   }
 
-  // Get all the existing files in the save directory, returns an array of filenames
-  var existingFileNames = fs.readdirSync(baseSaveDir);
-  // Add 1 to the length since need to start 1 greater
-  var existingFileCount = existingFileNames.length;
-  var fileNameStartNum = existingFileNames.length + 1;
-  console.log("Found " + existingFileCount + " files in " + baseSaveDir + " starting at file number " + fileNameStartNum);
-
   for (var i = 0; i < medias.length; i++) {
     var mediaUrl = medias[i].url;
     var ext = medias[i].ext;
@@ -290,6 +283,13 @@ function saveImages(baseSaveDir, medias) {
       var mediaType = medias[i].type;
       ext = mime.extension(mediaType);
     }
+
+    // Get all the existing files in the save directory, returns an array of filenames
+    var existingFileNames = fs.readdirSync(baseSaveDir);
+    // Add 1 to the length since need to start 1 greater
+    var existingFileCount = existingFileNames.length;
+    var fileNameStartNum = existingFileNames.length + 1;
+    console.log("Found " + existingFileCount + " files in " + baseSaveDir + " starting at file number " + fileNameStartNum);
     var savePath = path.join(baseSaveDir, fileNameStartNum + '.' + ext);
 
     console.log('Saving MediaUrl: ' + mediaUrl + ' to path ' + savePath);
@@ -302,8 +302,6 @@ function saveImages(baseSaveDir, medias) {
         io.emit('newMedia', urlPath);
       });
     });
-    // Don't forget to get the new file number!
-    fileNameStartNum++;
   }
 }
 
