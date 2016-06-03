@@ -277,11 +277,11 @@ function saveImages(baseSaveDir, medias) {
   // Get all the existing files in the save directory, returns an array of filenames
   var existingFileNames = fs.readdirSync(baseSaveDir);
   // Add 1 to the length since need to start 1 greater
-  var fileNameStartNum = (existingFileNames) ? existingFileNames.length + 1 : 1
+  var existingFileCount = existingFileNames.length;
+  var fileNameStartNum = existingFileNames.length + 1;
+  console.log("Found " + existingFileCount + " files in " + baseSaveDir + " starting at file number " + fileNameStartNum);
 
   for (var i = 0; i < medias.length; i++) {
-    fileNameStartNum += i;
-
     var mediaUrl = medias[i].url;
     var ext = medias[i].ext;
     if (!ext) {
@@ -300,6 +300,8 @@ function saveImages(baseSaveDir, medias) {
         io.emit('newMedia', urlPath);
       });
     });
+    // Don't forget to get the new file number!
+    fileNameStartNum++;
   }
 }
 
