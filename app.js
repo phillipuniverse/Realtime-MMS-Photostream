@@ -33,6 +33,8 @@ var INSTAGRAM_CLIENT_SECRET = process.env.INSTAGRAM_CLIENT_SECRET;
 var INSTAGRAM_CALLBACK_URL = process.env.INSTAGRAM_CALLBACK_URL || BASE_DOMAIN + '/instagram/post';
 var INSTAGRAM_OAUTH_REDIRECT_URL = process.env.INSTAGRAM_OAUTH_REDIRECT_URL || BASE_DOMAIN + '/oauth';
 var INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
+var INSTAGRAM_SEARCH_TAGS = process.env.INSTAGRAM_SEARCH_TAGS
+  || ['phillipandloren', 'plvwedding', 'shinergasp', 'crosseyedcat', 'philpartay'];
 instagram.set('client_id', INSTAGRAM_CLIENT_ID);
 instagram.set('client_secret', INSTAGRAM_CLIENT_SECRET);
 instagram.set('access_token', INSTAGRAM_ACCESS_TOKEN);
@@ -317,51 +319,62 @@ io.on('connection', function(socket){
 });
 
 function pollInstagramData() {
-  var newestImagesId = storage.getItem('newest_images_id');
+  for (var i = 0; i < INSTAGRAM_SEARCH_TAGS.length; i++) {
+    var tag = INSTAGRAM_SEARCH_TAGS[i];
+    var newestImagesId = storage.getItem(tag + '_newest_images_id');
 
-  // Get recent data from the Instagram tag
-  instagram.tags.recent({
-    name: 'shinergasp',
-    // only get images that were uploaded after the last time we checked
-    min_tag_id: newestImagesId,
-    complete: function(data, pagination) {
-      if (data.length) {
-        console.log('Found ' + data.length + ' images for the tag');
-      } else {
-        console.log('No recent images found for the given tag');
-        return;
-      }
-
-      // Next time we poll, make sure to pass this in so we don't get back duplicate images
-      storage.setItem('newest_images_id', pagination.min_tag_id);
-
-      // Compile a map of all the media keyed by where to save them since multiple users
-      // could have uploaded within a single page
-      var imagesToSave = {};
-      for (var i = 0; i < data.length; i++) {
-        var media = data[i];
-        if (media.type == "image") {
-          var imgUrl = media.images.standard_resolution.url;
-          var savePath = path.join(STATICS_DIR, 'img/instagram', media.user.username);
-          // Throw this into a map keyed by the save path because multiple user uploads
-          // could have existed in the same page
-          console.log("Parsed out an image from " + media.user.username);
-          if (!imagesToSave[savePath]) {
-            imagesToSave[savePath] = [];
-          }
-          imagesToSave[savePath].push(parseInstagramMediaUrl(imgUrl));
+    console.log("Starting search for images tagged with " + tag);
+    // Get recent data from the Instagram tag
+    instagram.tags.recent({
+      name: tag,
+      // only get images that were uploaded after the last time we checked
+      min_tag_id: newestImagesId,
+      complete: function(data, pagination) {
+        var tag = this.tag;
+        // Happens on some errors like OAuthRateLimitException
+        if (!data) {
+          console.log('Error loading recent images tagged with ' + tag + ': ' + errMessage);
+          return;
         }
-      }
 
-      for (var savePath in imagesToSave) {
-        if (!imagesToSave.hasOwnProperty(savePath)) { continue; }
-        saveImages(savePath, imagesToSave[savePath]);
+        if (data.length) {
+          console.log('Found ' + data.length + ' images for the tag');
+        } else {
+          console.log('No recent images found for the given tag');
+          return;
+        }
+
+        // Next time we poll, make sure to pass this in so we don't get back duplicate images
+        storage.setItem(tag + '_newest_images_id', pagination.min_tag_id);
+
+        // Compile a map of all the media keyed by where to save them since multiple users
+        // could have uploaded within a single page
+        var imagesToSave = {};
+        for (var i = 0; i < data.length; i++) {
+          var media = data[i];
+          if (media.type == "image") {
+            var imgUrl = media.images.standard_resolution.url;
+            var savePath = path.join(STATICS_DIR, 'img/instagram', media.user.username);
+            // Throw this into a map keyed by the save path because multiple user uploads
+            // could have existed in the same page
+            console.log("Parsed out an image from " + media.user.username);
+            if (!imagesToSave[savePath]) {
+              imagesToSave[savePath] = [];
+            }
+            imagesToSave[savePath].push(parseInstagramMediaUrl(imgUrl));
+          }
+        }
+
+        for (var savePath in imagesToSave) {
+          if (!imagesToSave.hasOwnProperty(savePath)) { continue; }
+          saveImages(savePath, imagesToSave[savePath]);
+        }
+      }.bind({tag:tag}),
+      error: function(errMessage, err, caller) {
+        console.log('Error loading recent images from tag: ' + errMessage);
       }
-    },
-    error: function(errMessage, err, caller) {
-      console.log('Error loading recent images from tag: ' + errMessage);
-    }
-  });
+    });
+  }
 }
 
 server.listen(app.get('port'), function() {
