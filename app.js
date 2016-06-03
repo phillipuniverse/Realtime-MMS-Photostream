@@ -132,17 +132,11 @@ app.post('/instagram/post', function(req, res) {
         // The image is good, let's save it!
         console.log('We found a tag we were looking for, saving the image locally');
         var standardResUrl = data.images.standard_resolution.url;
-        // Doing something special here because there is a query string on the end of the
-        // file name for the ig_cache_key. This cache key can have a . in it
-        var ext = path.extname(url.parse(standardResUrl).pathname);
-        var media = [{
-          url: standardResUrl,
-          // Strip out the leading period
-          ext: ext.substr(1)
-        }];
+
+        var media = parseInstagramMediaUrl(standardResUrl);
         var persistedUser = storage.getItem(userId);
         var savePath = path.join(STATICS_DIR, 'img/instagram', persistedUser.username);
-        saveImages(savePath, media);
+        saveImages(savePath, [media]);
 
       }
     });
@@ -151,6 +145,21 @@ app.post('/instagram/post', function(req, res) {
     // We've already seen this media so don't screw with it again. Sometimes instagram likes
     // to hit the endpoint multiple times
 });
+
+/**
+ * Parses out the media URL that we get from Instagram and gives us back something suitable
+ * to pass along to saveImages()
+ */
+function parseInstagramMediaUrl(instagramImgUrl) {
+  // Doing something special here because there is a query string on the end of the
+  // file name for the ig_cache_key. This cache key can have a . in it
+  var ext = path.extname(url.parse(instagramImgUrl).pathname);
+  return {
+    url: instagramImgUrl,
+    // Strip out the leading period
+    ext: ext.substr(1)
+  };
+}
 
 app.get('/oauth_success', function(req, res) {
   console.log(req.params);
@@ -257,20 +266,20 @@ function handleTwilioMessage(mediaRequest, numMedia) {
 
 /*
  * savePath - where the image should be saved to
- * mediaUrls - List of objects of the form {url = 'http://....url', ext='.jpg', type='image/jpeg'}. The
+ * mediaUrls - List of objects of the form {url = 'http://....', ext='.jpg', type='image/jpeg'}. The
  *    extension part is appended to the end of the file as it is saved on the local filesystem
  */
-function saveImages(savePath, medias) {
-  if (!fs.existsSync(savePath)) {
-    fs.mkdirSync(savePath);
+function saveImages(baseSaveDir, medias) {
+  if (!fs.existsSync(baseSaveDir)) {
+    fs.mkdirSync(baseSaveDir);
   }
 
   // Get all the existing files in the save directory, returns an array of filenames
-  var existingFileNames = fs.readdirSync(savePath);
+  var existingFileNames = fs.readdirSync(baseSaveDir);
   // Add 1 to the length since need to start 1 greater
   var fileNameStartNum = (existingFileNames) ? existingFileNames.length + 1 : 1
 
-  for (i = 0; i < medias.length; i++) {
+  for (var i = 0; i < medias.length; i++) {
     fileNameStartNum += i;
 
     var mediaUrl = medias[i].url;
@@ -279,7 +288,7 @@ function saveImages(savePath, medias) {
       var mediaType = medias[i].type;
       ext = mime.extension(mediaType);
     }
-    var savePath = path.join(savePath, fileNameStartNum + '.' + ext);
+    var savePath = path.join(baseSaveDir, fileNameStartNum + '.' + ext);
 
     console.log('Saving MediaUrl: ' + mediaUrl + ' to path ' + savePath);
     var file = fs.createWriteStream(savePath);
@@ -302,22 +311,53 @@ io.on('connection', function(socket){
     socket.emit('connected', 'Connected!');
 
     // Now that the socket is connected, start polling instagram for data every couple of seconds
-    //setInterval(updateInstagramData, 5000);
+    setInterval(pollInstagramData, 5000);
 });
 
-function updateInstagramData() {
+function pollInstagramData() {
+  var newestImagesId = storage.getItem('newest_images_id');
+
   // Get recent data from the Instagram tag
   instagram.tags.recent({
     name: 'shinergasp',
-    complete: function(media_items) {
-      if (media_items) {
-        console.log('Found ' + media_items.length + ' images for the tag');
+    // only get images that were uploaded after the last time we checked
+    min_tag_id: newestImagesId,
+    complete: function(data, pagination) {
+      if (data.length) {
+        console.log('Found ' + data.length + ' images for the tag');
       } else {
-        console.log('No media found for the given tag');
+        console.log('No recent images found for the given tag');
+        return;
+      }
+
+      // Next time we poll, make sure to pass this in so we don't get back duplicate images
+      storage.setItem('newest_images_id', pagination.min_tag_id);
+
+      // Compile a map of all the media keyed by where to save them since multiple users
+      // could have uploaded within a single page
+      var imagesToSave = {};
+      for (var i = 0; i < data.length; i++) {
+        var media = data[i];
+        if (media.type == "image") {
+          var imgUrl = media.images.standard_resolution.url;
+          var savePath = path.join(STATICS_DIR, 'img/instagram', media.user.username);
+          // Throw this into a map keyed by the save path because multiple user uploads
+          // could have existed in the same page
+          console.log("Parsed out an image from " + media.user.username);
+          if (!imagesToSave[savePath]) {
+            imagesToSave[savePath] = [];
+          }
+          imagesToSave[savePath].push(parseInstagramMediaUrl(imgUrl));
+        }
+      }
+
+      for (var savePath in imagesToSave) {
+        if (!imagesToSave.hasOwnProperty(savePath)) { continue; }
+        saveImages(savePath, imagesToSave[savePath]);
       }
     },
     error: function(errMessage, err, caller) {
-      console.log('Error: ' + errMessage);
+      console.log('Error loading recent images from tag: ' + errMessage);
     }
   });
 }
@@ -325,11 +365,13 @@ function updateInstagramData() {
 server.listen(app.get('port'), function() {
     console.log('Express server listening on *:' + app.get('port'));
 
-    console.log('Re-subscribing to all authenticated user posts');
-    var unsubResult = instagram.users.unsubscribe_all({});
-    if (unsubResult) {
-      console.log('There was an error in removing exising subscriptions: ' + unsubResult);
-    }
+    if (process.env.SUBSCRIBE) {
+      console.log('Re-subscribing to all authenticated user posts');
+      var unsubResult = instagram.users.unsubscribe_all({});
+      if (unsubResult) {
+        console.log('There was an error in removing exising subscriptions: ' + unsubResult);
+      }
 
-    instagram.users.subscribe({});
+      instagram.users.subscribe({});
+    }
 });
